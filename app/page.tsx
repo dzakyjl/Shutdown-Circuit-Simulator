@@ -241,7 +241,7 @@ export default function Home() {
       <div className="grid">
         <div>
           <section className="panel">
-            <h2>Shutdown loop</h2>
+            <h2>Shutdown Loop Schematic</h2>
             <ol id="chain">
               {ITEMS.map((x, i) => {
                 const sc = x.k in switches;
