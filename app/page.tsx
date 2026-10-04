@@ -162,6 +162,7 @@ export default function Home() {
   // Timer loop for BSPD logic
   useEffect(() => {
     const interval = setInterval(() => {
+      // Access current state accurately
       const cond =
         switches.lvms === 1 &&
         brake >= brakeTarget &&
@@ -191,6 +192,7 @@ export default function Home() {
               setSwitches((s) => ({ ...s, bspd: 1 }));
               setTimer(0);
               addLog("BSPD self-reset after 10 s without the condition");
+              return 0;
             }
             return next;
           });
@@ -201,7 +203,15 @@ export default function Home() {
     }, 50);
 
     return () => clearInterval(interval);
-  }, [switches, brake, throttle, brakeTarget, throttleTarget, allowSelfReset]);
+  }, [
+    switches.lvms,
+    switches.bspd,
+    brake,
+    throttle,
+    brakeTarget,
+    throttleTarget,
+    allowSelfReset,
+  ]);
 
   // Set point check warning messages
   const warnings = [];
