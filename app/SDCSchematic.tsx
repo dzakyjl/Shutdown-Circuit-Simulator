@@ -53,29 +53,31 @@ export const SDCSchematic: React.FC<SDCSchematicProps> = ({
       >
         <rect x="0" y="-35" width="100" height="70" fill="transparent" />
 
-        {/* Left/Right Contacts */}
+        {/* Contacts */}
         <circle
           cx="10"
           cy="0"
           r="4.5"
-          className={
-            pState.poweredBefore
-              ? "fill-emerald-400 drop-shadow-[0_0_6px_#10b981]"
-              : "fill-slate-700"
-          }
+          fill={pState.poweredBefore ? "#10b981" : "#334155"}
+          style={{
+            filter: pState.poweredBefore
+              ? "drop-shadow(0px 0px 6px #10b981)"
+              : "none",
+          }}
         />
         <circle
           cx="90"
           cy="0"
           r="4.5"
-          className={
-            pState.poweredAfter
-              ? "fill-emerald-400 drop-shadow-[0_0_6px_#10b981]"
-              : "fill-slate-700"
-          }
+          fill={pState.poweredAfter ? "#10b981" : "#334155"}
+          style={{
+            filter: pState.poweredAfter
+              ? "drop-shadow(0px 0px 6px #10b981)"
+              : "none",
+          }}
         />
 
-        {/* Switch Blade */}
+        {/* Switch Lever Blade */}
         <motion.line
           x1="10"
           y1="0"
@@ -94,25 +96,36 @@ export const SDCSchematic: React.FC<SDCSchematicProps> = ({
           x="50"
           y="-18"
           textAnchor="middle"
-          className="fill-slate-200 font-sans text-[11px] font-bold group-hover:fill-blue-400 transition-colors"
+          fill="#f1f5f9"
+          style={{
+            fontSize: "11px",
+            fontWeight: 700,
+            fontFamily: "sans-serif",
+          }}
         >
           {title}
         </text>
 
-        {/* Status Badge */}
+        {/* Badge Background */}
         <rect
           x="22"
           y="12"
           width="56"
           height="18"
           rx="4"
-          className={isClosed ? "fill-emerald-500" : "fill-red-500"}
+          fill={isClosed ? "#10b981" : "#ef4444"}
         />
         <text
           x="50"
           y="25"
           textAnchor="middle"
-          className="fill-white font-mono text-[9.5px] font-bold tracking-wider"
+          fill="#ffffff"
+          style={{
+            fontSize: "9.5px",
+            fontWeight: 700,
+            fontFamily: "monospace",
+            letterSpacing: "0.05em",
+          }}
         >
           {isClosed ? "CLOSED" : "OPEN"}
         </text>
@@ -122,7 +135,12 @@ export const SDCSchematic: React.FC<SDCSchematicProps> = ({
             x="50"
             y="40"
             textAnchor="middle"
-            className="fill-slate-500 font-mono text-[8.5px] font-semibold"
+            fill="#64748b"
+            style={{
+              fontSize: "8.5px",
+              fontWeight: 600,
+              fontFamily: "monospace",
+            }}
           >
             AUTO TRIP
           </text>
@@ -151,13 +169,20 @@ export const SDCSchematic: React.FC<SDCSchematicProps> = ({
             width="80"
             height="50"
             rx="6"
-            className="fill-slate-900 stroke-blue-500 stroke-[1.5px]"
+            fill="#0f172a"
+            stroke="#3b82f6"
+            strokeWidth="1.5"
           />
           <text
             x="40"
             y="24"
             textAnchor="middle"
-            className="fill-white font-sans text-[11px] font-bold"
+            fill="#ffffff"
+            style={{
+              fontSize: "11px",
+              fontWeight: 700,
+              fontFamily: "sans-serif",
+            }}
           >
             12V LV
           </text>
@@ -165,7 +190,8 @@ export const SDCSchematic: React.FC<SDCSchematicProps> = ({
             x="40"
             y="38"
             textAnchor="middle"
-            className="fill-slate-400 font-mono text-[9px]"
+            fill="#94a3b8"
+            style={{ fontSize: "9px", fontFamily: "monospace" }}
           >
             BATTERY
           </text>
@@ -221,18 +247,21 @@ export const SDCSchematic: React.FC<SDCSchematicProps> = ({
             width="250"
             height="70"
             rx="8"
-            className={`transition-colors duration-300 fill-slate-900 stroke-[1.5px] ${
-              isLoopClosed
-                ? "stroke-emerald-500 fill-emerald-950/20"
-                : "stroke-slate-800"
-            }`}
+            fill={isLoopClosed ? "rgba(16, 185, 129, 0.1)" : "#0f172a"}
+            stroke={isLoopClosed ? "#10b981" : "#1e293b"}
+            strokeWidth="1.5"
             filter={isLoopClosed ? "url(#neon-glow)" : "none"}
           />
           <text
             x="125"
             y="26"
             textAnchor="middle"
-            className="fill-white font-sans text-[11px] font-bold"
+            fill="#ffffff"
+            style={{
+              fontSize: "11px",
+              fontWeight: 700,
+              fontFamily: "sans-serif",
+            }}
           >
             FUEL PUMP, INJECTION
           </text>
@@ -240,7 +269,12 @@ export const SDCSchematic: React.FC<SDCSchematicProps> = ({
             x="125"
             y="42"
             textAnchor="middle"
-            className="fill-white font-sans text-[11px] font-bold"
+            fill="#ffffff"
+            style={{
+              fontSize: "11px",
+              fontWeight: 700,
+              fontFamily: "sans-serif",
+            }}
           >
             & IGNITION RELAY
           </text>
@@ -248,28 +282,35 @@ export const SDCSchematic: React.FC<SDCSchematicProps> = ({
             x="125"
             y="58"
             textAnchor="middle"
-            className="fill-slate-500 font-mono text-[9px]"
+            fill="#64748b"
+            style={{ fontSize: "9px", fontFamily: "monospace" }}
           >
             CV 4.1 INTERRUPTERS
           </text>
         </g>
 
-        {/* Loop Status Bar */}
+        {/* Loop Status Indicator */}
         <g transform="translate(300, 425)">
           <circle
             cx="15"
             cy="15"
             r="8"
-            className={
-              isLoopClosed
-                ? "fill-emerald-500 drop-shadow-[0_0_8px_#10b981]"
-                : "fill-slate-700"
-            }
+            fill={isLoopClosed ? "#10b981" : "#334155"}
+            style={{
+              filter: isLoopClosed
+                ? "drop-shadow(0px 0px 8px #10b981)"
+                : "none",
+            }}
           />
           <text
             x="35"
             y="20"
-            className="fill-white font-sans text-[12px] font-bold tracking-wide"
+            fill="#ffffff"
+            style={{
+              fontSize: "12px",
+              fontWeight: 700,
+              fontFamily: "sans-serif",
+            }}
           >
             {isLoopClosed
               ? "LOOP CLOSED — POWER ACTIVE"
