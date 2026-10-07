@@ -1,200 +1,137 @@
 "use client";
 
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useCallback, useMemo } from "react";
+import {
+  ShieldCheck,
+  AlertTriangle,
+  Play,
+  RefreshCw,
+  Power,
+} from "lucide-react";
+import { INTERRUPTERS } from "./sdcConfig";
+import { SwitchKey, SwitchStates, ComponentPowerStates } from "./sdc";
+import { SDCSchematic } from "./SDCSchematic";
 
-interface Item {
-  k: string;
-  n: string;
-  d: string;
-  a?: string;
-  b?: string;
-}
-
-const ITEMS: Item[] = [
-  { k: "src", n: "LV battery, 12 V", d: "Supply for the shutdown circuit." },
-  {
-    k: "lvms",
-    n: "Low voltage master switch (LVMS)",
-    d: "Disables power from the battery and alternator to the whole LV system. Cycling it clears a BSPD trip. T 11.3",
-    a: "Switch off",
-    b: "Switch on",
-  },
-  {
-    k: "bspd",
-    n: "BSPD",
-    d: "Standalone, non-programmable, supplied directly from the LVMS. Opens on hard braking with throttle more than 25 % over idle. T 11.6",
-  },
-  {
-    k: "cockpit",
-    n: "Cockpit shutdown button",
-    d: "Red push-rotate or push-pull emergency switch the driver can reach. T 11.4",
-    a: "Press",
-    b: "Twist to release",
-  },
-  {
-    k: "right",
-    n: "Right shutdown button",
-    d: "Red, behind the driver at head level. One on each side. T 11.4",
-    a: "Press",
-    b: "Twist to release",
-  },
-  {
-    k: "left",
-    n: "Left shutdown button",
-    d: "Red, behind the driver at head level. One on each side. T 11.4",
-    a: "Press",
-    b: "Twist to release",
-  },
-  {
-    k: "bots",
-    n: "Brake over-travel switch (BOTS)",
-    d: "Opens when the pedal over-travels after a brake circuit failure. The driver cannot reset it, and pressing again must not close it. T 6.2",
-    a: "Over-travel",
-    b: "Reset (not by driver)",
-  },
-  {
-    k: "inertia",
-    n: "Inertia switch",
-    d: "Opens on impact and latches open until manually reset. T 11.5",
-    a: "Simulate impact",
-    b: "Reset",
-  },
-  {
-    k: "sink",
-    n: "Fuel pump relay, injection and ignition relay",
-    d: "The SDC directly controls all power to ignition, injectors and fuel pumps, through at least two relays. CV 4.1",
-  },
-];
-
-export default function Home() {
-  const [switches, setSwitches] = useState<Record<string, number>>({
-    lvms: 1,
-    cockpit: 1,
-    right: 1,
-    left: 1,
-    bots: 1,
-    inertia: 1,
-    bspd: 1,
+export default function SDCSimulatorPage() {
+  const [switches, setSwitches] = useState<SwitchStates>({
+    lvms: true,
+    bspd: true,
+    cockpit: true,
+    right: true,
+    left: true,
+    bots: true,
+    inertia: true,
   });
 
-  const [started, setStarted] = useState(false);
-  const [logs, setLogs] = useState<string[]>([]);
+  const [engineStarted, setEngineStarted] = useState(false);
   const [brake, setBrake] = useState(0);
   const [throttle, setThrottle] = useState(0);
   const [brakeTarget, setBrakeTarget] = useState(30);
   const [throttleTarget, setThrottleTarget] = useState(25);
-  const [allowSelfReset, setAllowSelfReset] = useState(false);
-  const [timer, setTimer] = useState(0);
+  const [autoReset, setAutoReset] = useState(false);
+
+  const [bspdTimer, setBspdTimer] = useState(0);
   const [clearTimer, setClearTimer] = useState(0);
+  const [logs, setLogs] = useState<
+    Array<{ id: string; time: string; msg: string }>
+  >([]);
 
-  const t0 = useRef<number>(Date.now());
-  const prevOK = useRef<boolean>(true);
+  const startTime = useMemo(() => Date.now(), []);
 
-  const isLoopClosed = Object.values(switches).every((v) => v === 1);
+  const addLog = useCallback(
+    (msg: string) => {
+      const time = ((Date.now() - startTime) / 1000).toFixed(1);
+      setLogs((prev) => [
+        { id: Math.random().toString(), time: `${time}s`, msg },
+        ...prev,
+      ]);
+    },
+    [startTime],
+  );
 
-  const firstOpen = () => ITEMS.find((x) => switches[x.k] === 0);
+  const isLoopClosed = useMemo(
+    () => Object.values(switches).every(Boolean),
+    [switches],
+  );
 
-  const addLog = (msg: string) => {
-    const time = ((Date.now() - t0.current) / 1000).toFixed(1);
-    setLogs((prev) => [`${time} s   ${msg}`, ...prev.slice(0, 7)]);
-  };
+  // Compute power flow state across elements in sequence
+  const powerStates = useMemo(() => {
+    let current = true;
+    const res: ComponentPowerStates = {
+      src: { poweredBefore: true, poweredAfter: true },
+    };
 
-  useEffect(() => {
-    addLog("Simulator ready, loop closed");
-  }, []);
+    INTERRUPTERS.forEach((item) => {
+      const isClosed = switches[item.key];
+      const poweredBefore = current;
+      const poweredAfter = current && isClosed;
+      res[item.key] = { poweredBefore, poweredAfter };
+      current = poweredAfter;
+    });
 
+    return res;
+  }, [switches]);
+
+  const firstOpenInterrupter = useMemo(() => {
+    return INTERRUPTERS.find((item) => !switches[item.key]);
+  }, [switches]);
+
+  const toggleSwitch = useCallback(
+    (key: SwitchKey) => {
+      setSwitches((prev) => {
+        const nextState = !prev[key];
+        if (key === "lvms" && !nextState) {
+          // Switching off LVMS clears BSPD trip
+          return { ...prev, lvms: false, bspd: true };
+        }
+        return { ...prev, [key]: nextState };
+      });
+
+      const target = INTERRUPTERS.find((i) => i.key === key);
+      addLog(
+        `${target?.title || key} -> ${!switches[key] ? "CLOSED" : "OPENED"}`,
+      );
+    },
+    [switches, addLog],
+  );
+
+  // Reset engine status if loop breaks
   useEffect(() => {
     if (!isLoopClosed) {
-      setStarted(false);
+      setEngineStarted(false);
     }
-    if (isLoopClosed !== prevOK.current) {
-      const openItem = firstOpen();
-      addLog(
-        isLoopClosed
-          ? "Loop closed, power restored"
-          : `Loop opened by ${openItem ? openItem.n : "unknown"}`,
-      );
-      prevOK.current = isLoopClosed;
-    }
-  }, [switches, isLoopClosed]);
+  }, [isLoopClosed]);
 
-  const toggleSwitch = (k: string) => {
-    setSwitches((prev) => {
-      const nextVal = prev[k] ^ 1;
-      const updated = { ...prev, [k]: nextVal };
-
-      if (k === "lvms" && !nextVal) {
-        updated.bspd = 1;
-        setTimer(0);
-      }
-      return updated;
-    });
-
-    const item = ITEMS.find((i) => i.k === k);
-    if (item) {
-      addLog(`${item.n} ${switches[k] ? "opened" : "closed"}`);
-    }
-  };
-
-  const handleStart = () => {
-    setStarted(true);
-    addLog("Engine started");
-  };
-
-  const handleReset = () => {
-    setSwitches({
-      lvms: 1,
-      cockpit: 1,
-      right: 1,
-      left: 1,
-      bots: 1,
-      inertia: 1,
-      bspd: 1,
-    });
-    setTimer(0);
-    setClearTimer(0);
-    setStarted(false);
-    setBrake(0);
-    setThrottle(0);
-    addLog("Everything reset");
-  };
-
-  // Timer loop for BSPD logic
+  // BSPD Plausibility & Reset Engine Loop
   useEffect(() => {
     const interval = setInterval(() => {
-      // Access current state accurately
-      const cond =
-        switches.lvms === 1 &&
-        brake >= brakeTarget &&
-        throttle >= throttleTarget;
+      const condition =
+        switches.lvms && brake >= brakeTarget && throttle >= throttleTarget;
 
-      if (switches.bspd === 1) {
-        if (cond) {
-          setTimer((t) => {
-            const next = t + 50;
-            if (next >= 500) {
-              setSwitches((s) => ({ ...s, bspd: 0 }));
-              setClearTimer(0);
+      if (switches.bspd) {
+        if (condition) {
+          setBspdTimer((prev) => {
+            if (prev + 50 >= 500) {
+              setSwitches((s) => ({ ...s, bspd: false }));
               addLog(
-                "BSPD tripped: hard braking and throttle over idle for 0.5 s",
+                "TRIP: BSPD plausibility condition exceeded 500ms threshold",
               );
-            }
-            return next;
-          });
-        } else {
-          setTimer(0);
-        }
-      } else if (switches.lvms === 1 && allowSelfReset) {
-        if (!cond) {
-          setClearTimer((c) => {
-            const next = c + 50;
-            if (next >= 10000) {
-              setSwitches((s) => ({ ...s, bspd: 1 }));
-              setTimer(0);
-              addLog("BSPD self-reset after 10 s without the condition");
               return 0;
             }
-            return next;
+            return prev + 50;
+          });
+        } else {
+          setBspdTimer(0);
+        }
+      } else if (switches.lvms && autoReset) {
+        if (!condition) {
+          setClearTimer((prev) => {
+            if (prev + 50 >= 10000) {
+              setSwitches((s) => ({ ...s, bspd: true }));
+              addLog("BSPD 10s auto-reset timer elapsed — cleared");
+              return 0;
+            }
+            return prev + 50;
           });
         } else {
           setClearTimer(0);
@@ -204,256 +141,420 @@ export default function Home() {
 
     return () => clearInterval(interval);
   }, [
-    switches.lvms,
     switches.bspd,
+    switches.lvms,
     brake,
     throttle,
     brakeTarget,
     throttleTarget,
-    allowSelfReset,
+    autoReset,
+    addLog,
   ]);
 
-  // Set point check warning messages
-  const warnings = [];
-  if (brakeTarget > 30) warnings.push("brake set point is above 30 bar");
-  if (throttleTarget > 25)
-    warnings.push("throttle set point is above 25 % over idle");
-
-  // Track power rail state during iteration
-  let currentOn = true;
+  const handleResetCircuit = () => {
+    setSwitches({
+      lvms: true,
+      bspd: true,
+      cockpit: true,
+      right: true,
+      left: true,
+      bots: true,
+      inertia: true,
+    });
+    setEngineStarted(false);
+    setBspdTimer(0);
+    setClearTimer(0);
+    setBrake(0);
+    setThrottle(0);
+    addLog("System reset triggered — circuit restored");
+  };
 
   return (
-    <div className="wrap">
-      <h1>Shutdown circuit simulator</h1>
-      <p className="sub">
-        The combustion shutdown circuit (SDC) from Formula Student Rules 2027,
-        CV 4.1. It is a series chain: if any one device opens, the fuel pump,
-        injection and ignition lose power and the engine stops. Open devices and
-        watch where power stops.
-      </p>
+    <div className="min-h-screen bg-[#090d14] text-slate-100 font-sans p-6 md:p-10">
+      <div className="max-w-7xl mx-auto space-y-6">
+        {/* Header Title Area */}
+        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+          <div>
+            <h1 className="text-2xl md:text-3xl font-bold tracking-tight text-white flex items-center gap-3">
+              <span className="w-1.5 h-7 bg-blue-500 rounded-full shadow-[0_0_12px_#3b82f6]" />
+              Shutdown Circuit Simulator
+            </h1>
+            <p className="text-sm text-slate-400 mt-1 max-w-2xl">
+              Formula Student Rules 2027 (CV 4.1) combustion shutdown loop
+              simulator. All interrupters are wired in series: if any switch
+              opens, the circuit breaks instantly.
+            </p>
+          </div>
+          <div className="font-mono text-xs font-semibold px-3.5 py-1.5 rounded-full border border-blue-500/40 bg-blue-500/10 text-blue-400 shadow-[0_0_12px_rgba(59,130,246,0.2)]">
+            @dzakyjl
+          </div>
+        </div>
 
-      <div id="banner" className={isLoopClosed ? "good" : "bad"}>
-        {isLoopClosed
-          ? "Loop closed. Power reaches the ignition, fuel pump and injectors."
-          : `Loop open at: ${firstOpen()?.n}. Everything after it is dead, so the engine is off.`}
-      </div>
+        {/* Global Status Banner */}
+        <div
+          className={`p-4 rounded-xl border flex items-center gap-3 font-semibold text-sm transition-all duration-300 ${
+            isLoopClosed
+              ? "bg-emerald-950/20 border-emerald-500/40 text-emerald-400 shadow-[0_0_20px_rgba(16,185,129,0.15)]"
+              : "bg-red-950/20 border-red-500/40 text-red-400 shadow-[0_0_20px_rgba(239,68,68,0.15)]"
+          }`}
+        >
+          {isLoopClosed ? (
+            <>
+              <ShieldCheck className="w-5 h-5 text-emerald-400 animate-pulse" />
+              <span>
+                LOOP CLOSED — Power active across ignition, fuel pump relay, and
+                injectors.
+              </span>
+            </>
+          ) : (
+            <>
+              <AlertTriangle className="w-5 h-5 text-red-400 animate-pulse" />
+              <span>
+                LOOP OPEN — Interrupted at [
+                {firstOpenInterrupter?.title || "Unknown"}]. Downstream circuit
+                unpowered.
+              </span>
+            </>
+          )}
+        </div>
 
-      <div className="grid">
-        <div>
-          <section className="panel">
-            <h2>Shutdown Loop Schematic</h2>
-            <ol id="chain">
-              {ITEMS.map((x, i) => {
-                const sc = x.k in switches;
-                const closed = !sc || switches[x.k] === 1;
-                const top = currentOn;
-                const bot = currentOn && closed;
-                currentOn = bot;
+        {/* Dashboard Main Grid */}
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+          {/* Left Side: SVG Schematic & Control Panel */}
+          <div className="lg:col-span-7 space-y-6">
+            <div className="bg-[#111823] border border-slate-800 rounded-xl p-5 space-y-4">
+              <div className="flex justify-between items-center">
+                <h2 className="text-sm font-bold uppercase tracking-wider text-slate-200">
+                  SDC Schematic
+                </h2>
+                <span className="font-mono text-[11px] text-blue-400 bg-blue-500/10 px-2 py-0.5 rounded border border-blue-500/20">
+                  SERIES LOOP
+                </span>
+              </div>
+              <SDCSchematic
+                switches={switches}
+                powerStates={powerStates}
+                isLoopClosed={isLoopClosed}
+                onToggleSwitch={toggleSwitch}
+              />
+            </div>
 
-                return (
-                  <li className="row" key={x.k}>
-                    <div className="rail">
+            {/* Interrupter Controls List */}
+            <div className="bg-[#111823] border border-slate-800 rounded-xl p-5 space-y-4">
+              <div className="flex justify-between items-center">
+                <h2 className="text-sm font-bold uppercase tracking-wider text-slate-200">
+                  SDC Interrupter Controls
+                </h2>
+                <span className="font-mono text-[11px] text-blue-400 bg-blue-500/10 px-2 py-0.5 rounded border border-blue-500/20">
+                  MANUAL OVERRIDE
+                </span>
+              </div>
+
+              <div className="relative pl-5 space-y-5 before:absolute before:left-2 before:top-2 before:bottom-2 before:w-0.5 before:bg-slate-800">
+                {INTERRUPTERS.map((item) => {
+                  const isClosed = switches[item.key];
+                  return (
+                    <div
+                      key={item.key}
+                      className="relative flex items-start justify-between gap-4"
+                    >
+                      {/* Status Dot on Line */}
                       <span
-                        className={`seg ${top ? "on" : ""} ${
-                          i === 0 ? "hid" : ""
+                        className={`absolute -left-[17px] top-1.5 w-2.5 h-2.5 rounded-full border-2 border-[#111823] transition-colors ${
+                          isClosed
+                            ? "bg-emerald-400 shadow-[0_0_6px_#10b981]"
+                            : "bg-red-500 shadow-[0_0_6px_#ef4444]"
                         }`}
-                      ></span>
-                      <span
-                        className={`node ${
-                          closed ? (top ? "c live" : "c") : "o"
-                        }`}
-                      ></span>
-                      <span
-                        className={`seg ${bot ? "on" : ""} ${
-                          i === ITEMS.length - 1 ? "hid" : ""
-                        }`}
-                      ></span>
-                    </div>
-                    <div className="info">
-                      <b>{x.n}</b>
-                      <small>{x.d}</small>
-                    </div>
-                    <div className="ctl">
-                      {sc && (
-                        <span className={`st ${closed ? "" : "open"}`}>
-                          {closed ? "Closed" : "Open"}
+                      />
+
+                      <div className="space-y-0.5">
+                        <div className="text-sm font-bold text-slate-200 flex items-center gap-2">
+                          {item.title}
+                          <span className="font-mono text-[10px] text-slate-500 font-normal">
+                            ({item.ruleRef})
+                          </span>
+                        </div>
+                        <p className="text-xs text-slate-400 leading-relaxed max-w-md">
+                          {item.description}
+                        </p>
+                      </div>
+
+                      <div className="flex flex-col items-end gap-1.5 min-w-[110px]">
+                        <span
+                          className={`font-mono text-xs font-bold ${
+                            isClosed ? "text-emerald-400" : "text-red-400"
+                          }`}
+                        >
+                          {isClosed ? "Closed" : "Open"}
                         </span>
-                      )}
-                      {x.a && (
-                        <button onClick={() => toggleSwitch(x.k)}>
-                          {closed ? x.a : x.b}
-                        </button>
-                      )}
+                        {item.isAutoTrip ? (
+                          <span className="text-[10px] text-slate-500 font-mono">
+                            Auto Trip
+                          </span>
+                        ) : (
+                          <button
+                            onClick={() => toggleSwitch(item.key)}
+                            className="text-xs font-semibold px-3 py-1.5 rounded-md bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700/60 transition-colors"
+                          >
+                            {item.actionLabel(isClosed)}
+                          </button>
+                        )}
+                      </div>
                     </div>
-                  </li>
-                );
-              })}
-            </ol>
-          </section>
-        </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
 
-        <div>
-          <section className="panel">
-            <h2>Engine</h2>
-            <div className="chips">
-              <span className={`chip ${isLoopClosed ? "live" : ""}`}>
-                Ignition
-              </span>
-              <span className={`chip ${isLoopClosed ? "live" : ""}`}>
-                Fuel pump relay
-              </span>
-              <span className={`chip ${isLoopClosed ? "live" : ""}`}>
-                Injectors
-              </span>
-            </div>
-            <p style={{ margin: "0 0 10px", fontWeight: 500 }}>
-              {started
-                ? "Engine running"
-                : isLoopClosed
-                  ? "Engine stopped. The loop is closed, so it can be started."
-                  : "Engine stopped. Close the loop to start it."}
-            </p>
-            <div className="btns">
-              <button disabled={!isLoopClosed || started} onClick={handleStart}>
-                Start engine
-              </button>
-              <button className="alt" onClick={handleReset}>
-                Reset everything
-              </button>
-            </div>
-          </section>
+          {/* Right Side: Actuators, BSPD Calibration & Telemetry */}
+          <div className="lg:col-span-5 space-y-6">
+            {/* Engine Status & Actuators */}
+            <div className="bg-[#111823] border border-slate-800 rounded-xl p-5 space-y-4">
+              <div className="flex justify-between items-center">
+                <h2 className="text-sm font-bold uppercase tracking-wider text-slate-200">
+                  Engine Status
+                </h2>
+                <span className="font-mono text-[11px] text-blue-400 bg-blue-500/10 px-2 py-0.5 rounded border border-blue-500/20">
+                  CV 4.1
+                </span>
+              </div>
 
-          <section className="panel">
-            <h2>BSPD inputs</h2>
-            <div className="sl">
-              <label htmlFor="br">Brake pressure</label>
-              <output>{brake} bar</output>
-              <input
-                type="range"
-                id="br"
-                min="0"
-                max="100"
-                value={brake}
-                onChange={(e) => setBrake(+e.target.value)}
-              />
-            </div>
-            <div className="sl">
-              <label htmlFor="th">Throttle above idle</label>
-              <output>{throttle}%</output>
-              <input
-                type="range"
-                id="th"
-                min="0"
-                max="100"
-                value={throttle}
-                onChange={(e) => setThrottle(+e.target.value)}
-              />
-            </div>
-            <div className="btns" style={{ marginBottom: "14px" }}>
-              <button
-                className="alt"
-                onClick={() => {
-                  setBrake(80);
-                  setThrottle(60);
-                }}
-              >
-                Hard brake with throttle
-              </button>
-              <button
-                className="alt"
-                onClick={() => {
-                  setBrake(0);
-                  setThrottle(0);
-                }}
-              >
-                Release pedals
-              </button>
-            </div>
+              <div className="grid grid-cols-3 gap-2">
+                {["IGNITION", "FUEL PUMP", "INJECTORS"].map((label) => (
+                  <div
+                    key={label}
+                    className={`p-2.5 rounded-lg border font-mono text-[11px] font-bold text-center transition-all ${
+                      isLoopClosed
+                        ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-400 shadow-[0_0_10px_rgba(16,185,129,0.1)]"
+                        : "border-slate-800 bg-slate-900 text-slate-600"
+                    }`}
+                  >
+                    {label}
+                  </div>
+                ))}
+              </div>
 
-            <div className="sl">
-              <label htmlFor="bt">Brake set point</label>
-              <output>{brakeTarget} bar</output>
-              <input
-                type="range"
-                id="bt"
-                min="5"
-                max="95"
-                value={brakeTarget}
-                onChange={(e) => setBrakeTarget(+e.target.value)}
-              />
-            </div>
-            <div className="sl">
-              <label htmlFor="tt">Throttle set point</label>
-              <output>{throttleTarget}%</output>
-              <input
-                type="range"
-                id="tt"
-                min="5"
-                max="95"
-                value={throttleTarget}
-                onChange={(e) => setThrottleTarget(+e.target.value)}
-              />
-            </div>
-
-            <div className="bar" aria-hidden="true">
               <div
-                id="bar"
-                style={{ width: `${Math.min(100, timer / 5)}%` }}
-              ></div>
+                className={`p-3 rounded-lg font-mono text-xs border-l-4 bg-[#0b111a] ${
+                  engineStarted
+                    ? "border-l-emerald-400 text-emerald-400"
+                    : isLoopClosed
+                      ? "border-l-slate-600 text-slate-300"
+                      : "border-l-red-500 text-red-400"
+                }`}
+              >
+                {engineStarted
+                  ? "▶ ENGINE RUNNING — Powertrain Active"
+                  : isLoopClosed
+                    ? "■ ENGINE STOPPED — SDC Closed (Ready)"
+                    : "✖ ENGINE STOPPED — SDC Open"}
+              </div>
+
+              <div className="flex gap-2">
+                <button
+                  disabled={!isLoopClosed || engineStarted}
+                  onClick={() => {
+                    setEngineStarted(true);
+                    addLog(
+                      "Engine ignition sequence complete — Engine Running",
+                    );
+                  }}
+                  className="flex-1 bg-emerald-500 hover:bg-emerald-400 disabled:opacity-30 disabled:cursor-not-allowed text-black font-bold text-xs uppercase px-4 py-2.5 rounded-md shadow-[0_0_12px_rgba(16,185,129,0.3)] transition-all flex items-center justify-center gap-2"
+                >
+                  <Play className="w-4 h-4 fill-current" />
+                  Start Engine
+                </button>
+                <button
+                  onClick={handleResetCircuit}
+                  className="bg-slate-900 hover:bg-slate-800 text-slate-200 border border-slate-700 font-semibold text-xs px-3.5 py-2.5 rounded-md transition-colors flex items-center gap-1.5"
+                >
+                  <RefreshCw className="w-3.5 h-3.5" />
+                  Reset
+                </button>
+              </div>
             </div>
 
-            <p className="cap">
-              {switches.bspd === 1
-                ? `Plausibility timer: ${timer} ms of 500 ms. Trips when both set points are exceeded together for 500 ms.`
-                : allowSelfReset && switches.lvms === 1
-                  ? `BSPD tripped. Self-reset in ${Math.max(
-                      0,
-                      (10000 - clearTimer) / 1000,
-                    ).toFixed(
-                      1,
-                    )} s if the condition stays absent, or cycle the master switch.`
-                  : "BSPD tripped and latched. Cycle the master switch to clear it."}
-            </p>
+            {/* BSPD Calibration */}
+            <div className="bg-[#111823] border border-slate-800 rounded-xl p-5 space-y-4">
+              <div className="flex justify-between items-center">
+                <h2 className="text-sm font-bold uppercase tracking-wider text-slate-200">
+                  BSPD Calibration
+                </h2>
+                <span className="font-mono text-[11px] text-blue-400 bg-blue-500/10 px-2 py-0.5 rounded border border-blue-500/20">
+                  T 11.6
+                </span>
+              </div>
 
-            <label
-              className="cap"
-              style={{ display: "flex", gap: "8px", alignItems: "center" }}
-            >
-              <input
-                type="checkbox"
-                checked={allowSelfReset}
-                onChange={(e) => setAllowSelfReset(e.target.checked)}
-              />
-              Allow self-reset after 10 s without the condition
-            </label>
+              <div className="space-y-3">
+                <div className="bg-[#0b111a] p-3 rounded-lg border border-slate-800/60 space-y-1">
+                  <div className="flex justify-between text-xs">
+                    <span className="text-slate-400">Brake Pressure</span>
+                    <span className="font-mono font-bold text-blue-400">
+                      {brake} bar
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    min="0"
+                    max="100"
+                    value={brake}
+                    onChange={(e) => setBrake(Number(e.target.value))}
+                    className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-blue-500"
+                  />
+                </div>
 
-            <p className="cap">
-              {warnings.length
-                ? `Check your set points: ${warnings.join(
-                    " and ",
-                  )}, so the BSPD could miss the rule condition.`
-                : "Set points are at or below the rule values (30 bar, 25 % over idle)."}
-            </p>
-          </section>
+                <div className="bg-[#0b111a] p-3 rounded-lg border border-slate-800/60 space-y-1">
+                  <div className="flex justify-between text-xs">
+                    <span className="text-slate-400">Throttle Position</span>
+                    <span className="font-mono font-bold text-blue-400">
+                      {throttle}%
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    min="0"
+                    max="100"
+                    value={throttle}
+                    onChange={(e) => setThrottle(Number(e.target.value))}
+                    className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-blue-500"
+                  />
+                </div>
 
-          <section className="panel">
-            <h2>Event log</h2>
-            <ul id="log">
-              {logs.map((logMsg, i) => (
-                <li key={i}>{logMsg}</li>
-              ))}
-            </ul>
-          </section>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => {
+                      setBrake(80);
+                      setThrottle(60);
+                    }}
+                    className="text-xs bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-800 py-1.5 px-3 rounded-md transition-colors"
+                  >
+                    Hard Brake + Throttle
+                  </button>
+                  <button
+                    onClick={() => {
+                      setBrake(0);
+                      setThrottle(0);
+                    }}
+                    className="text-xs bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-800 py-1.5 px-3 rounded-md transition-colors"
+                  >
+                    Zero Pedals
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2 pt-2">
+                  <div className="bg-[#0b111a] p-2.5 rounded-lg border border-slate-800/60 space-y-1">
+                    <div className="flex justify-between text-[11px]">
+                      <span className="text-slate-400">Brake Setpoint</span>
+                      <span className="font-mono font-bold text-blue-400">
+                        {brakeTarget} bar
+                      </span>
+                    </div>
+                    <input
+                      type="range"
+                      min="5"
+                      max="95"
+                      value={brakeTarget}
+                      onChange={(e) => setBrakeTarget(Number(e.target.value))}
+                      className="w-full h-1 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-blue-500"
+                    />
+                  </div>
+
+                  <div className="bg-[#0b111a] p-2.5 rounded-lg border border-slate-800/60 space-y-1">
+                    <div className="flex justify-between text-[11px]">
+                      <span className="text-slate-400">Throttle Setpoint</span>
+                      <span className="font-mono font-bold text-blue-400">
+                        {throttleTarget}%
+                      </span>
+                    </div>
+                    <input
+                      type="range"
+                      min="5"
+                      max="95"
+                      value={throttleTarget}
+                      onChange={(e) =>
+                        setThrottleTarget(Number(e.target.value))
+                      }
+                      className="w-full h-1 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-blue-500"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Progress Bar Timer */}
+              <div className="space-y-1.5 pt-2">
+                <div className="h-2 bg-slate-900 rounded-full overflow-hidden border border-slate-800">
+                  <div
+                    className="h-full bg-gradient-to-r from-amber-500 to-red-500 transition-all duration-75"
+                    style={{ width: `${Math.min(100, bspdTimer / 5)}%` }}
+                  />
+                </div>
+
+                <p className="font-mono text-xs text-slate-400">
+                  {switches.bspd
+                    ? `Plausibility Timer: ${bspdTimer} ms / 500 ms`
+                    : autoReset && switches.lvms
+                      ? brake >= brakeTarget && throttle >= throttleTarget
+                        ? "BSPD Tripped — Release pedals to start 10s auto-reset countdown."
+                        : `BSPD Tripped — Auto-resetting in ${Math.max(
+                            0,
+                            (10000 - clearTimer) / 1000,
+                          ).toFixed(1)}s...`
+                      : "BSPD Tripped & Latched — Cycle LVMS to clear."}
+                </p>
+
+                <label className="flex items-center gap-2 text-xs text-slate-400 cursor-pointer pt-1">
+                  <input
+                    type="checkbox"
+                    checked={autoReset}
+                    onChange={(e) => setAutoReset(e.target.checked)}
+                    className="rounded bg-slate-900 border-slate-700 text-blue-500 focus:ring-0"
+                  />
+                  Enable 10s auto-reset without fault condition
+                </label>
+              </div>
+            </div>
+
+            {/* Event Log */}
+            <div className="bg-[#111823] border border-slate-800 rounded-xl p-5 space-y-4">
+              <div className="flex justify-between items-center">
+                <h2 className="text-sm font-bold uppercase tracking-wider text-slate-200">
+                  Telemetry Console
+                </h2>
+                <span className="font-mono text-[11px] text-blue-400 bg-blue-500/10 px-2 py-0.5 rounded border border-blue-500/20">
+                  EVENT LOG
+                </span>
+              </div>
+
+              <div className="bg-[#070a0f] border border-slate-800 rounded-lg p-3 h-48 overflow-y-auto font-mono text-xs space-y-1.5">
+                {logs.length === 0 ? (
+                  <p className="text-slate-600 italic">
+                    No events logged yet...
+                  </p>
+                ) : (
+                  logs.map((log) => (
+                    <div
+                      key={log.id}
+                      className="text-slate-400 border-b border-slate-800/40 pb-1 last:border-0"
+                    >
+                      <span className="text-slate-500">[{log.time}]</span>{" "}
+                      {log.msg}
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          </div>
         </div>
-      </div>
 
-      <p className="note">
-        Based on Formula Student Rules 2027 v1.0 (FSG): T 6.2, T 11.3 to T 11.6
-        and CV 4.1. The 500 ms delay, the 30 bar hard-braking level and the 10 s
-        self-reset come from earlier editions and were not visible in the 2027
-        text I could read, so confirm them in T 11.6 of the official PDF.
-        Event-specific rules and your event handbook take precedence.
-      </p>
+        {/* Footer Note */}
+        <p className="text-xs text-slate-500 leading-relaxed bg-slate-900/40 border border-slate-800 p-4 rounded-lg">
+          Based on Formula Student Rules 2027 v1.0 (FSG): T 6.2, T 11.3 to T
+          11.6, and CV 4.1. Note that the 500 ms trip delay, 30 bar hard-braking
+          limit, and 10 s self-reset logic carry over from prior regulations.
+          Designed by @dzakyjl.
+        </p>
+      </div>
     </div>
   );
 }
